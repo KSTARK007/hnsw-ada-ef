@@ -352,14 +352,17 @@ class InnerProductSpace : public SpaceInterface<float> {
         if (AVX512Capable()) {
             InnerProductSIMD16Ext = InnerProductSIMD16ExtAVX512;
             InnerProductDistanceSIMD16Ext = InnerProductDistanceSIMD16ExtAVX512;
+            std::cout << "Using AVX512 Inner Product distance" << std::endl;
         } else if (AVXCapable()) {
             InnerProductSIMD16Ext = InnerProductSIMD16ExtAVX;
             InnerProductDistanceSIMD16Ext = InnerProductDistanceSIMD16ExtAVX;
+            std::cout << "Using AVX Inner Product distance" << std::endl;
         }
     #elif defined(USE_AVX)
         if (AVXCapable()) {
             InnerProductSIMD16Ext = InnerProductSIMD16ExtAVX;
             InnerProductDistanceSIMD16Ext = InnerProductDistanceSIMD16ExtAVX;
+            std::cout << "Using AVX Inner Product distance" << std::endl;
         }
     #endif
     #if defined(USE_AVX)

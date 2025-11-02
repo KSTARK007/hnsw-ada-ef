@@ -10,6 +10,9 @@
 #include <list>
 #include <memory>
 
+#include "distribution.h"
+#include "sketch.h"
+
 namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
@@ -1323,6 +1326,784 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         return result;
     }
 
+    std::pair<std::priority_queue<std::pair<dist_t, labeltype>>, float>
+    adaptiveSearchKnn(
+        const void *query_data, 
+        const size_t k, 
+        const size_t statics_length,
+        const hnswdis::ApproximatedScoreCalculator& score_calculator,
+        hnswdis::Sketch* sketch = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr,
+        bool print_ef = false // flag to print ef used in search, which is used to understand the distribution of actually used ef in the queries
+    ) const {
+        std::priority_queue<std::pair<dist_t, labeltype >> result;
+        if (cur_element_count == 0) return {result, 0};
+
+        tableint currObj = enterpoint_node_;
+        dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+
+        for (int level = maxlevel_; level > 0; level--) {
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                unsigned int *data;
+
+                data = (unsigned int *) get_linklist(currObj, level);
+                int size = getListCount(data);
+                metric_hops++;
+                metric_distance_computations+=size;
+
+                tableint *datal = (tableint *) (data + 1);
+                for (int i = 0; i < size; i++) {
+                    tableint cand = datal[i];
+                    if (cand < 0 || cand > max_elements_)
+                        throw std::runtime_error("cand error");
+                    dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+
+                    if (d < curdist) {
+                        curdist = d;
+                        currObj = cand;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        std::pair<std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>, float> base_layer_result;
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        bool bare_bone_search = !num_deleted_ && !isIdAllowed;
+        if (bare_bone_search) {
+            base_layer_result = adaptiveSearchBaseLayerST<true>(
+                    currObj, query_data, std::max(ef_, k), statics_length, score_calculator, sketch, isIdAllowed);
+            top_candidates = std::move(base_layer_result.first);            
+        } else {
+            base_layer_result = adaptiveSearchBaseLayerST<false>(
+                    currObj, query_data, std::max(ef_, k), statics_length, score_calculator, sketch, isIdAllowed);
+            top_candidates = std::move(base_layer_result.first);
+        }
+
+        while (top_candidates.size() > k) {
+            top_candidates.pop();
+        }
+        while (top_candidates.size() > 0) {
+            std::pair<dist_t, tableint> rez = top_candidates.top();
+            result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+            top_candidates.pop();
+        }
+
+        return {result, base_layer_result.second};
+    }
+
+    // bare_bone_search means there is no check for deletions and stop condition is ignored in return of extra performance
+    template <bool bare_bone_search = true, bool collect_metrics = false>
+    std::pair<std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>, float>
+    adaptiveSearchBaseLayerST(
+        tableint ep_id,
+        const void* data_point,
+        size_t ef, 
+        size_t statics_length,
+        const hnswdis::ApproximatedScoreCalculator& score_calculator,
+        hnswdis::Sketch* sketch,
+        BaseFilterFunctor* isIdAllowed = nullptr,
+        BaseSearchStopCondition<dist_t>* stop_condition = nullptr,
+        bool print_ef = false
+    ) const {
+
+        // change === start    
+        size_t ef_copy = ef;
+        ef = std::numeric_limits<size_t>::max();
+        bool flag_collect_statistics = true;
+        size_t statics_limit = statics_length;
+        dist_t distances[statics_limit]; 
+        size_t size_distances = 0;
+        float score = 0.0; 
+        // change === end      
+
+        VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+        vl_type *visited_array = vl->mass;
+        vl_type visited_array_tag = vl->curV;
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
+
+        dist_t lowerBound;
+        if (bare_bone_search || 
+            (!isMarkedDeleted(ep_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id))))) {
+            char* ep_data = getDataByInternalId(ep_id);
+            dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+            lowerBound = dist;
+            
+            top_candidates.emplace(dist, ep_id);
+            // change === start    
+            if (flag_collect_statistics){                
+                distances[size_distances] = dist;
+                ++size_distances;
+            }
+            // change === start    
+
+            if (!bare_bone_search && stop_condition) {
+                stop_condition->add_point_to_result(getExternalLabel(ep_id), ep_data, dist);
+            }
+            candidate_set.emplace(-dist, ep_id);
+        } else {
+            lowerBound = std::numeric_limits<dist_t>::max();
+            candidate_set.emplace(-lowerBound, ep_id);
+        }
+
+        visited_array[ep_id] = visited_array_tag;
+
+        while (!candidate_set.empty()) {
+            std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
+            dist_t candidate_dist = -current_node_pair.first;
+
+            bool flag_stop_search;
+            if (bare_bone_search) {
+                flag_stop_search = candidate_dist > lowerBound;
+            } else {
+                if (stop_condition) {
+                    flag_stop_search = stop_condition->should_stop_search(candidate_dist, lowerBound);
+                } else {
+                    flag_stop_search = candidate_dist > lowerBound && top_candidates.size() == ef;
+                }
+            }
+            if (flag_stop_search) {
+                break;
+            }
+            candidate_set.pop();
+
+            tableint current_node_id = current_node_pair.second;
+            int *data = (int *) get_linklist0(current_node_id);
+            size_t size = getListCount((linklistsizeint*)data);
+//                bool cur_node_deleted = isMarkedDeleted(current_node_id);
+            if (collect_metrics) {
+                metric_hops++;
+                metric_distance_computations+=size;
+            }
+
+#ifdef USE_SSE
+            _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
+            _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
+            _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
+            _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+#endif
+
+            for (size_t j = 1; j <= size; j++) {
+                int candidate_id = *(data + j);
+//                    if (candidate_id == 0) continue;
+#ifdef USE_SSE
+                _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
+                _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
+                                _MM_HINT_T0);  ////////////
+#endif
+                if (!(visited_array[candidate_id] == visited_array_tag)) {
+                    visited_array[candidate_id] = visited_array_tag;
+
+                    char *currObj1 = (getDataByInternalId(candidate_id));
+                    dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);                    
+
+                    bool flag_consider_candidate;
+                    if (!bare_bone_search && stop_condition) {
+                        flag_consider_candidate = stop_condition->should_consider_candidate(dist, lowerBound);
+                    } else {
+
+                        // change === start
+                        if (flag_collect_statistics){
+                            flag_consider_candidate = true;
+                            if (size_distances == statics_limit){ // let the search run for statics_limit iterations
+                                flag_collect_statistics = false;
+                                score = score_calculator.compute_score(data_point, *((size_t *) dist_func_param_), distances, size_distances);                                
+                                if (sketch){
+                                    ef = sketch->estimate_ef2(score); // used for estimating ef
+                                    if (ef < ef_copy){ 
+                                        ef = ef_copy;
+                                    }
+                                } else {
+                                    ef = ef_copy;
+                                }      
+
+                                // print ef: for ef distribution analysis
+                                if (print_ef){
+                                    std::cout << ef << ",";
+                                }
+                                
+                                // shrinking top_candidates to ef in case it is larger
+                                while(top_candidates.size() > ef){
+                                    top_candidates.pop();
+                                }
+                                if (!top_candidates.empty()){
+                                    lowerBound = top_candidates.top().first;
+                                }
+                            }
+                        } else {
+                        // change === end
+                            flag_consider_candidate = top_candidates.size() < ef || lowerBound > dist;
+                        }
+                        
+                    }
+
+                    if (flag_consider_candidate) {
+                        candidate_set.emplace(-dist, candidate_id);
+#ifdef USE_SSE
+                        _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
+                                        offsetLevel0_,  ///////////
+                                        _MM_HINT_T0);  ////////////////////////
+#endif
+
+                        if (bare_bone_search || 
+                            (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
+                           
+                            top_candidates.emplace(dist, candidate_id);
+                            // change === start
+                            if (flag_collect_statistics){
+                                distances[size_distances] = dist;
+                                ++size_distances;
+                            }
+                            // change === end
+
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->add_point_to_result(getExternalLabel(candidate_id), currObj1, dist);
+                            }
+                        }
+
+                        bool flag_remove_extra = false;
+                        if (!bare_bone_search && stop_condition) {
+                            flag_remove_extra = stop_condition->should_remove_extra();
+                        } else {
+                            flag_remove_extra = top_candidates.size() > ef;
+                        }
+                        while (flag_remove_extra) {
+                            tableint id = top_candidates.top().second;
+                            top_candidates.pop();
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->remove_point_from_result(getExternalLabel(id), getDataByInternalId(id), dist);
+                                flag_remove_extra = stop_condition->should_remove_extra();
+                            } else {
+                                flag_remove_extra = top_candidates.size() > ef;
+                            }
+                        }
+
+                        if (!top_candidates.empty())
+                            lowerBound = top_candidates.top().first;
+                    }
+                }
+            }
+        }
+
+        visited_list_pool_->releaseVisitedList(vl);
+        return {top_candidates, score};
+    }
+
+
+    std::priority_queue<std::pair<dist_t, labeltype>>
+    adaptiveSearchKnnTest(
+        const void *query_data, 
+        const size_t k, 
+        const size_t statics_length,
+        const hnswdis::ApproximatedScoreCalculator& score_calculator,
+        hnswdis::Sketch* sketch = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr) const {
+
+        std::priority_queue<std::pair<dist_t, labeltype >> result;
+        if (cur_element_count == 0) return result;
+
+        tableint currObj = enterpoint_node_;
+
+        dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+
+        for (int level = maxlevel_; level > 0; level--) {
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                unsigned int *data;
+
+                data = (unsigned int *) get_linklist(currObj, level);
+                int size = getListCount(data);
+                metric_hops++;
+                metric_distance_computations+=size;
+
+                tableint *datal = (tableint *) (data + 1);
+                for (int i = 0; i < size; i++) {
+                    tableint cand = datal[i];
+                    if (cand < 0 || cand > max_elements_)
+                        throw std::runtime_error("cand error");
+                    dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+
+                    if (d < curdist) {
+                        curdist = d;
+                        currObj = cand;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        bool bare_bone_search = !num_deleted_ && !isIdAllowed;
+
+        if (bare_bone_search) {
+            top_candidates = adaptiveSearchBaseLayerST2<true>(
+                    currObj, query_data, std::max(ef_, k), statics_length, score_calculator, sketch, isIdAllowed);
+                        
+        } else {
+            top_candidates = adaptiveSearchBaseLayerST2<false>(
+                    currObj, query_data, std::max(ef_, k), statics_length, score_calculator, sketch, isIdAllowed);
+            
+        }
+
+        while (top_candidates.size() > k) {
+            top_candidates.pop();
+        }
+        while (top_candidates.size() > 0) {
+            std::pair<dist_t, tableint> rez = top_candidates.top();
+            result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+            top_candidates.pop();
+        }
+
+        return result;
+    }
+
+    // bare_bone_search means there is no check for deletions and stop condition is ignored in return of extra performance
+    template <bool bare_bone_search = true, bool collect_metrics = false>
+    std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
+    adaptiveSearchBaseLayerST2(
+        tableint ep_id,
+        const void* data_point,
+        size_t ef, 
+        size_t statics_length,
+        const hnswdis::ApproximatedScoreCalculator& score_calculator,
+        hnswdis::Sketch* sketch,
+        BaseFilterFunctor* isIdAllowed = nullptr,
+        BaseSearchStopCondition<dist_t>* stop_condition = nullptr) const {
+
+        // change === start    
+        size_t ef_copy = ef;
+        ef = std::numeric_limits<size_t>::max();
+        bool flag_collect_statistics = true;
+        size_t statics_limit = statics_length;
+        dist_t distances[statics_limit]; 
+        size_t size_distances = 0;
+        float score = 0.0; 
+        // change === end      
+
+        VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+        vl_type *visited_array = vl->mass;
+        vl_type visited_array_tag = vl->curV;
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
+
+        dist_t lowerBound;
+        if (bare_bone_search || 
+            (!isMarkedDeleted(ep_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id))))) {
+            char* ep_data = getDataByInternalId(ep_id);
+            dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+            lowerBound = dist;
+            
+            top_candidates.emplace(dist, ep_id);
+            // change === start    
+            if (flag_collect_statistics){                
+                distances[size_distances] = dist;
+                ++size_distances;
+            }
+            // change === start    
+
+            if (!bare_bone_search && stop_condition) {
+                stop_condition->add_point_to_result(getExternalLabel(ep_id), ep_data, dist);
+            }
+            candidate_set.emplace(-dist, ep_id);
+        } else {
+            lowerBound = std::numeric_limits<dist_t>::max();
+            candidate_set.emplace(-lowerBound, ep_id);
+        }
+
+        visited_array[ep_id] = visited_array_tag;
+
+        while (!candidate_set.empty()) {
+            std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
+            dist_t candidate_dist = -current_node_pair.first;
+
+            bool flag_stop_search;
+            if (bare_bone_search) {
+                flag_stop_search = candidate_dist > lowerBound;
+            } else {
+                if (stop_condition) {
+                    flag_stop_search = stop_condition->should_stop_search(candidate_dist, lowerBound);
+                } else {
+                    flag_stop_search = candidate_dist > lowerBound && top_candidates.size() == ef;
+                }
+            }
+            if (flag_stop_search) {
+                break;
+            }
+            candidate_set.pop();
+
+            tableint current_node_id = current_node_pair.second;
+            int *data = (int *) get_linklist0(current_node_id);
+            size_t size = getListCount((linklistsizeint*)data);
+//                bool cur_node_deleted = isMarkedDeleted(current_node_id);
+            if (collect_metrics) {
+                metric_hops++;
+                metric_distance_computations+=size;
+            }
+
+#ifdef USE_SSE
+            _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
+            _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
+            _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
+            _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+#endif
+
+            for (size_t j = 1; j <= size; j++) {
+                int candidate_id = *(data + j);
+//                    if (candidate_id == 0) continue;
+#ifdef USE_SSE
+                _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
+                _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
+                                _MM_HINT_T0);  ////////////
+#endif
+                if (!(visited_array[candidate_id] == visited_array_tag)) {
+                    visited_array[candidate_id] = visited_array_tag;
+
+                    char *currObj1 = (getDataByInternalId(candidate_id));
+                    dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);                    
+
+                    bool flag_consider_candidate;
+                    if (!bare_bone_search && stop_condition) {
+                        flag_consider_candidate = stop_condition->should_consider_candidate(dist, lowerBound);
+                    } else {
+
+                        // change === start
+                        if (flag_collect_statistics){
+                            flag_consider_candidate = true;
+                            if (size_distances == statics_limit){ // let the search run for statics_limit iterations
+                                flag_collect_statistics = false;
+                                score = score_calculator.compute_score(data_point, *((size_t *) dist_func_param_), distances, size_distances);                                
+                                if (sketch){
+                                    ef = sketch->estimate_ef2(score);  // get estimated ef                                  
+                                    if (ef < ef_copy){ 
+                                        ef = ef_copy;
+                                    }
+                                } else {
+                                    ef = ef_copy; 
+                                }
+                                
+                                // shrinking top_candidates to ef in case it is larger
+                                while(top_candidates.size() > ef){
+                                    top_candidates.pop();
+                                }
+
+                                if (!top_candidates.empty()){
+                                    lowerBound = top_candidates.top().first;
+                                }
+                            }
+                        } else {
+                        // change === end
+                            flag_consider_candidate = top_candidates.size() < ef || lowerBound > dist;
+                        }
+                        
+                    }
+
+                    if (flag_consider_candidate) {
+                        candidate_set.emplace(-dist, candidate_id);
+#ifdef USE_SSE
+                        _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
+                                        offsetLevel0_,  ///////////
+                                        _MM_HINT_T0);  ////////////////////////
+#endif
+
+                        if (bare_bone_search || 
+                            (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
+                           
+                            top_candidates.emplace(dist, candidate_id);
+                            // change === start
+                            if (flag_collect_statistics){
+                                distances[size_distances] = dist;
+                                ++size_distances;
+                            }
+                            // change === end
+
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->add_point_to_result(getExternalLabel(candidate_id), currObj1, dist);
+                            }
+                        }
+
+                        bool flag_remove_extra = false;
+                        if (!bare_bone_search && stop_condition) {
+                            flag_remove_extra = stop_condition->should_remove_extra();
+                        } else {
+                            flag_remove_extra = top_candidates.size() > ef;
+                        }
+                        while (flag_remove_extra) {
+                            tableint id = top_candidates.top().second;
+                            top_candidates.pop();
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->remove_point_from_result(getExternalLabel(id), getDataByInternalId(id), dist);
+                                flag_remove_extra = stop_condition->should_remove_extra();
+                            } else {
+                                flag_remove_extra = top_candidates.size() > ef;
+                            }
+                        }
+
+                        if (!top_candidates.empty())
+                            lowerBound = top_candidates.top().first;
+                    }
+                }
+            }
+        }
+
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+    }
+
+
+    // implementation of Patience in Proximity
+    // two parameters: saturationThreshold (gemma) and patience (delta)
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchKnnWithPatienceInProximity(const void *query_data, size_t k, float saturationThreshold = 0.95,
+                                      int patience = 30, BaseFilterFunctor* isIdAllowed = nullptr) const {
+        std::priority_queue<std::pair<dist_t, labeltype >> result;
+        if (cur_element_count == 0) return result;
+
+        tableint currObj = enterpoint_node_;
+        dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+
+        for (int level = maxlevel_; level > 0; level--) {
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                unsigned int *data;
+
+                data = (unsigned int *) get_linklist(currObj, level);
+                int size = getListCount(data);
+                metric_hops++;
+                metric_distance_computations+=size;
+
+                tableint *datal = (tableint *) (data + 1);
+                for (int i = 0; i < size; i++) {
+                    tableint cand = datal[i];
+                    if (cand < 0 || cand > max_elements_)
+                        throw std::runtime_error("cand error");
+                    dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+
+                    if (d < curdist) {
+                        curdist = d;
+                        currObj = cand;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        bool bare_bone_search = !num_deleted_ && !isIdAllowed;
+        if (bare_bone_search) {
+            top_candidates = searchBaseLayerSTWithPatienceInProximity<true>( // change here to call Patience in Proximity version, ef must be k according to the paper
+                    currObj, query_data, std::max(ef_, k), k, saturationThreshold, patience, isIdAllowed);
+        } else {
+            top_candidates = searchBaseLayerSTWithPatienceInProximity<false>( // change here to call Patience in Proximity version, ef must be k according to the paper
+                    currObj, query_data, std::max(ef_, k), k, saturationThreshold, patience, isIdAllowed);
+        }
+
+        while (top_candidates.size() > k) {
+            top_candidates.pop();
+        }
+        while (top_candidates.size() > 0) {
+            std::pair<dist_t, tableint> rez = top_candidates.top();
+            result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+            top_candidates.pop();
+        }
+        return result;
+    }
+
+    // bare_bone_search means there is no check for deletions and stop condition is ignored in return of extra performance
+    template <bool bare_bone_search = true, bool collect_metrics = false>
+    std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
+    searchBaseLayerSTWithPatienceInProximity(
+        tableint ep_id,
+        const void *data_point,
+        size_t ef,
+        size_t k,
+        float saturationThreshold,
+        int patience,
+        BaseFilterFunctor* isIdAllowed = nullptr,
+        BaseSearchStopCondition<dist_t>* stop_condition = nullptr) const {
+        VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+        vl_type *visited_array = vl->mass;
+        vl_type visited_array_tag = vl->curV;
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
+
+        dist_t lowerBound;
+        if (bare_bone_search || 
+            (!isMarkedDeleted(ep_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id))))) {
+            char* ep_data = getDataByInternalId(ep_id);
+            dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+            lowerBound = dist;
+            top_candidates.emplace(dist, ep_id);
+            if (!bare_bone_search && stop_condition) {
+                stop_condition->add_point_to_result(getExternalLabel(ep_id), ep_data, dist);
+            }
+            candidate_set.emplace(-dist, ep_id);
+        } else {
+            lowerBound = std::numeric_limits<dist_t>::max();
+            candidate_set.emplace(-lowerBound, ep_id);
+        }
+
+        visited_array[ep_id] = visited_array_tag;
+
+        // variables for Patience in Proximity (start)
+        int stable_counter = 0;
+        std::vector<tableint> prev_topk_ids;
+        prev_topk_ids.reserve(k);  // assuming you know 'k' externally
+        // variables for Patience in Proximity (end)
+
+        while (!candidate_set.empty()) {
+            std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
+            dist_t candidate_dist = -current_node_pair.first;
+
+            bool flag_stop_search;
+            if (bare_bone_search) {
+                flag_stop_search = candidate_dist > lowerBound;
+            } else {
+                if (stop_condition) {
+                    flag_stop_search = stop_condition->should_stop_search(candidate_dist, lowerBound);
+                } else {
+                    flag_stop_search = candidate_dist > lowerBound && top_candidates.size() == ef;
+                }
+            }
+            if (flag_stop_search) {
+                break;
+            }
+            candidate_set.pop();
+
+            tableint current_node_id = current_node_pair.second;
+            int *data = (int *) get_linklist0(current_node_id);
+            size_t size = getListCount((linklistsizeint*)data);
+//                bool cur_node_deleted = isMarkedDeleted(current_node_id);
+            if (collect_metrics) {
+                metric_hops++;
+                metric_distance_computations+=size;
+            }
+
+#ifdef USE_SSE
+            _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
+            _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
+            _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
+            _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+#endif
+
+            for (size_t j = 1; j <= size; j++) {
+                int candidate_id = *(data + j);
+//                    if (candidate_id == 0) continue;
+#ifdef USE_SSE
+                _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
+                _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
+                                _MM_HINT_T0);  ////////////
+#endif
+                if (!(visited_array[candidate_id] == visited_array_tag)) {
+                    visited_array[candidate_id] = visited_array_tag;
+
+                    char *currObj1 = (getDataByInternalId(candidate_id));
+                    dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+
+                    bool flag_consider_candidate;
+                    if (!bare_bone_search && stop_condition) {
+                        flag_consider_candidate = stop_condition->should_consider_candidate(dist, lowerBound);
+                    } else {
+                        flag_consider_candidate = top_candidates.size() < ef || lowerBound > dist;
+                    }
+
+                    if (flag_consider_candidate) {
+                        candidate_set.emplace(-dist, candidate_id);
+#ifdef USE_SSE
+                        _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
+                                        offsetLevel0_,  ///////////
+                                        _MM_HINT_T0);  ////////////////////////
+#endif
+
+                        if (bare_bone_search || 
+                            (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
+                            top_candidates.emplace(dist, candidate_id);
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->add_point_to_result(getExternalLabel(candidate_id), currObj1, dist);
+                            }
+                        }
+
+                        bool flag_remove_extra = false;
+                        if (!bare_bone_search && stop_condition) {
+                            flag_remove_extra = stop_condition->should_remove_extra();
+                        } else {
+                            flag_remove_extra = top_candidates.size() > ef;
+                        }
+                        while (flag_remove_extra) {
+                            tableint id = top_candidates.top().second;
+                            top_candidates.pop();
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->remove_point_from_result(getExternalLabel(id), getDataByInternalId(id), dist);
+                                flag_remove_extra = stop_condition->should_remove_extra();
+                            } else {
+                                flag_remove_extra = top_candidates.size() > ef;
+                            }
+                        }
+
+                        if (!top_candidates.empty())
+                            lowerBound = top_candidates.top().first;
+                    }
+                }
+            }
+        
+            // Patience in Proximity logic (start)
+            if (top_candidates.size() >= k) {
+                // make a deep copy of priority queue to extract top-k elements
+                auto tmp = top_candidates;
+
+                // Discard the worst until only k elements remain
+                while (tmp.size() > k) {
+                    tmp.pop();
+                }
+
+                // 1. Extract the current top-k subset from top_candidates (size ef)
+                std::vector<tableint> current_topk_ids;
+                current_topk_ids.reserve(k);
+                while (!tmp.empty()) {
+                    current_topk_ids.push_back(tmp.top().second);
+                    tmp.pop();
+                }
+                
+
+                // 2. Compute intersection between previous and current top-k sets
+                int intersection = 0;
+                if (!prev_topk_ids.empty()) {
+                    std::unordered_set<tableint> prev_set(prev_topk_ids.begin(), prev_topk_ids.end());
+                    for (auto id : current_topk_ids)
+                        if (prev_set.count(id))
+                            intersection++;
+                }
+
+                // 3. Compute φ = |intersection| / k
+                float phi = current_topk_ids.empty() ? 0.0f : (float)intersection / (float) k;
+
+                // 4. Update patience counter
+                if (phi >= saturationThreshold)
+                    stable_counter++;
+                else
+                    stable_counter = 0;
+
+                // 5. Early stop if saturation holds for Δ consecutive iterations
+                if (stable_counter >= patience) {
+                    // std::cout << "[PatienceInProximity] Early stop after " << iteration_count << " iterations\n";
+                    break;
+                }
+
+                // 6. Update previous top-k set
+                prev_topk_ids = std::move(current_topk_ids);
+            }
+        }
+
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+    }
 
     std::vector<std::pair<dist_t, labeltype >>
     searchStopConditionClosest(

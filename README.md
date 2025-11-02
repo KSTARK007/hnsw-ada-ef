@@ -1,3 +1,73 @@
+# HNSW Ada-ef - Adaptive efsearch configuration to approximately achieve declarative recall 
+A lightweight addon for HNSWlib that provides adaptive efsearch configuration, enabling declarative recall instead of manually setting efsearch. Ada-ef automatically adjusts the ef value for each incoming vector query, preventing both over-searching (excessively large ef for simple queries) and under-searching (insufficient ef for complex queries).
+
+
+## Reproducing the Experiments
+
+1. **Requirements**
+   - C++17 
+   - gcc 12.3.0
+   - CMake ≥ 3.26
+   - Eigen 3.4
+   - Boost 1.87.0
+   - HDF5
+
+2. **Configure library paths**  
+   Edit `CMakeLists.txt` to point to your local installs:
+   ```cmake
+   set(EIGEN3_INCLUDE_DIR "/path/to/eigen-3.4/include")
+   set(BOOST_ROOT "/path/to/boost-1.87.0")
+   set(HDF5_ROOT "/path/to/hdf5")
+   ```
+
+3. **Build the project**
+   ```bash
+   cmake -S . -B build # for the experiments, we build with -O3 -march=native. see CMakeLists.txt for detail
+   make -C build -j run
+   ```
+
+4. **Set the repository root**
+   ```bash
+   export ADA_EF_ROOT=/path/to/ada-ef
+   ```
+
+5. **Download data and index**
+   ```bash
+   to be added ...
+   ```
+
+6. **Setup folder directories for experiments**
+   ```bash
+   ./setup.sh
+   ```
+
+7. **Run experiments**
+   ```bash
+   nohup build/run > results.log 2>&1 &
+   ```
+The nohup.out contains all results. 
+
+
+## Explanation of Directories
+
+- **`data/`**: Stores the main dataset files used in experiments.
+- **`index/`**: Contains index files for the datasets.
+- **`estimation_table/`**: Holds ef-estimation tables of Ada-ef.
+- **`sampling/`**: Stores sampling vectors and their ground truth in Ada-ef.
+- **`statistics/`**: Contains statistical data such as mean, variance, and covariance matrices, i.e., database statistic required in Ada-ef.
+- **`ablation_distance_size/`**: Used for experiments analyzing the impact of distance list size.
+- **`ablation_sampling_size/`**: Used for experiments analyzing the impact of sampling size.
+- **`ablation_decay_func/`**: Used for experiments analyzing the impact of weighted decay functions.
+- **`incremental_update/`**: Contains subdirectories for incremental update experiments:
+  - **`10percent/`**: For experiments with 10% batch updates.
+  - **`50percent/`**: For experiments with 50% batch updates.
+- **`incremental_deletion/`**: Contains subdirectories for incremental deletion experiments:
+  - **`10percent/`**: For experiments with 10% batch deletions.
+  - **`50percent/`**: For experiments with 50% batch deletions.
+
+The script ensures that all directories are created, even if they already exist, using `mkdir -p`.
+
+----------------The following is the unchanged README from the original  HNSWlib-----------------------------------
 # Hnswlib - fast approximate nearest neighbor search
 Header-only C++ HNSW implementation with python bindings, insertions and updates.
 
