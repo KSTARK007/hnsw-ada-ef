@@ -11,3 +11,7 @@ var/
 .vs/
 **.DS_Store
 *.pyc
+
+cmake-build-debug/
+experiments/
+.venv
