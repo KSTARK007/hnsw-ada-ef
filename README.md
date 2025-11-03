@@ -36,9 +36,13 @@ A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on 
    ./setup.sh
    ```
 
-6. **Download data and index**
+6. **Download Data and Index**
+
+   Both the data and indexes used in the experiments can be downloaded as follows:
    - Download [ada-ef_exp_data_index.tar.gz](https://drive.google.com/uc?id=1K1yeVxLe6L2ZMjnwLxHcJOPoFy9uNR-_).
-   - Unpack it into the experiments directory: `tar -xzf ada-ef_exp_data_index.tar.gz -C $ADA_EF_ROOT/experiments`.
+   - Extract it into the experiments directory using the command: `tar -xzf ada-ef_exp_data_index.tar.gz -C $ADA_EF_ROOT/experiments`.
+
+   If you prefer to prepare these on your own, a Python Jupyter notebook for data collection and preparation is provided: `experiments_driver/data_prep.ipynb`. It includes detailed instructions on how the tested datasets, queries, and ground truth are computed. To build indexes from scratch, uncomment line 1418 in `experiments_driver/run.cpp` and recompile the code.
 
 7. **Run experiments**
    ```bash
