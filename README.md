@@ -47,7 +47,7 @@ A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on 
    The nohup.out contains all results for Ada-ef, HNSW (HNSWlib), and PiP reported in the paper. 
 
 8. **Reproducing results of DARTH, LAET, and HNSW (FAISS)**
-   - Follow the walkthrough in the README in this [anonymous GitHub repo](https://anonymous.4open.science/r/benchmarking-darth-5B8D/README.md). 
+   - Follow the walkthrough in the README under the folder `benchmarking-darth`. 
    - Ensure $ADA_EF_ROOT is set; the scripts load datasets from `$ADA_EF_ROOT/experiments/data` so make sure `$ADA_EF_ROOT` is available.
 
 
