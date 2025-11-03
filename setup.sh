@@ -7,8 +7,6 @@ EXPERIMENTS_ROOT="${ADA_EF_ROOT}/experiments"
 mkdir -p "$EXPERIMENTS_ROOT"
 
 dirs=(
-  data
-  index
   estimation_table
   sampling
   statistics

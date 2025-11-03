@@ -1,5 +1,5 @@
 # HNSW Ada-ef - Adaptive efsearch configuration to approximately achieve declarative recall 
-A lightweight addon for HNSWlib that provides adaptive efsearch configuration, enabling declarative recall instead of manually setting efsearch. Ada-ef automatically adjusts the ef value for each incoming vector query, preventing both over-searching (excessively large ef for simple queries) and under-searching (insufficient ef for complex queries).
+A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on a per-query basis, enabling declarative recall instead of manually setting efsearch. Ada-ef automatically adjusts the ef value for each incoming vector query, preventing both over-searching (excessively large ef for simple queries that require small efSearch to reach recall target) and under-searching (insufficient efSearch for hard queries that require large efSearch to reach recall target).
 
 
 ## Reproducing the Experiments
@@ -22,7 +22,7 @@ A lightweight addon for HNSWlib that provides adaptive efsearch configuration, e
 
 3. **Build the project**
    ```bash
-   cmake -S . -B build # for the experiments, we build with -O3 -march=native. see CMakeLists.txt for detail
+   cmake -S . -B build # for the experiments, we build with -O3 -march=native (this enables avx512 on the tested server). see CMakeLists.txt for detail. 
    make -C build -j run
    ```
 
@@ -31,27 +31,30 @@ A lightweight addon for HNSWlib that provides adaptive efsearch configuration, e
    export ADA_EF_ROOT=/path/to/ada-ef
    ```
 
-5. **Download data and index**
-   ```bash
-   to be added ...
-   ```
-
-6. **Setup folder directories for experiments**
+5. **Setup folder directories for experiments**
    ```bash
    ./setup.sh
    ```
+
+6. **Download data and index**
+   - Download [ada-ef_exp_data_index.tar.gz](https://drive.google.com/uc?id=1K1yeVxLe6L2ZMjnwLxHcJOPoFy9uNR-_).
+   - Unpack it into the experiments directory: `tar -xzf ada-ef_exp_data_index.tar.gz -C $ADA_EF_ROOT/experiments`.
 
 7. **Run experiments**
    ```bash
    nohup build/run > results.log 2>&1 &
    ```
-The nohup.out contains all results. 
+   The nohup.out contains all results for Ada-ef, HNSW (HNSWlib), and PiP reported in the paper. 
+
+8. **Reproducing results of DARTH, LAET, and HNSW (FAISS)**
+   - Follow the walkthrough in the README in this [anonymous GitHub repo](https://anonymous.4open.science/r/benchmarking-darth-5B8D/README.md). 
+   - Ensure $ADA_EF_ROOT is set; the scripts load datasets from `$ADA_EF_ROOT/experiments/data` so make sure `$ADA_EF_ROOT` is available.
 
 
 ## Explanation of Directories
 
-- **`data/`**: Stores the main dataset files used in experiments.
-- **`index/`**: Contains index files for the datasets.
+- **`data/`**: Stores the main vector datasets used in experiments.
+- **`index/`**: Contains HNSW indexes for the datasets.
 - **`estimation_table/`**: Holds ef-estimation tables of Ada-ef.
 - **`sampling/`**: Stores sampling vectors and their ground truth in Ada-ef.
 - **`statistics/`**: Contains statistical data such as mean, variance, and covariance matrices, i.e., database statistic required in Ada-ef.
@@ -67,7 +70,7 @@ The nohup.out contains all results.
 
 The script ensures that all directories are created, even if they already exist, using `mkdir -p`.
 
-----------------The following is the unchanged README from the original  HNSWlib-----------------------------------
+<h3 style="color:red">----------------The content below is the unmodified README from the original HNSWlib repository.----------------</h3>
 # Hnswlib - fast approximate nearest neighbor search
 Header-only C++ HNSW implementation with python bindings, insertions and updates.
 
