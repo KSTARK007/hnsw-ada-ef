@@ -8,7 +8,7 @@ This repository provides the code for reproducing the experimental results of DA
 - LightGBM 4.6.0.99
 
 ## Environment Variables
-- `DARTH_ROOT`: absolute path to this repository， `export DARTH_ROOT=/path/to/DARTH`
+- `DARTH_ROOT`: absolute path to this repository， `export DARTH_ROOT=$ADA_EF_ROOT/benchmarking-darth`
 - `LIGHTGBM_ROOT`: installation path of LightGBM (`lightgbm-install`), `export LIGHTGBM_ROOT=/path/to/lightgbm-install`
 
 ## Build FAISS with DARTH
