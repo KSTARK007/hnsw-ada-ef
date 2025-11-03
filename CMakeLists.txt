@@ -6,15 +6,15 @@ project(hnswlib
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)
 
-set(EIGEN3_INCLUDE_DIR "/home/c223zhan/lib/eigen-3.4.0")
+set(EIGEN3_INCLUDE_DIR "/path/to/eigen-3.4.0")
 add_library(eigen INTERFACE)
 target_include_directories(eigen INTERFACE ${EIGEN3_INCLUDE_DIR})
 
-set(BOOST_ROOT "/home/c223zhan/lib/boost_1_87_0")
+set(BOOST_ROOT "/path/to/boost_1_87_0")
 add_library(boost INTERFACE)
 target_include_directories(boost INTERFACE ${BOOST_ROOT})
 
-set(HDF5_ROOT "/home/c223zhan/lib/hdf5")
+set(HDF5_ROOT "/path/to/hdf5")
 
 add_library(hnswlib INTERFACE)
 add_library(hnswlib::hnswlib ALIAS hnswlib)
