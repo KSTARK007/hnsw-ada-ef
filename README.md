@@ -68,8 +68,6 @@ A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on 
   - **`10percent/`**: For experiments with 10% batch deletions.
   - **`50percent/`**: For experiments with 50% batch deletions.
 
-The script ensures that all directories are created, even if they already exist, using `mkdir -p`.
-
 <h3 style="color:red">----------------The content below is the unmodified README from the original HNSWlib repository.----------------</h3>
 # Hnswlib - fast approximate nearest neighbor search
 Header-only C++ HNSW implementation with python bindings, insertions and updates.
