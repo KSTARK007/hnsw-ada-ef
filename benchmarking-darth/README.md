@@ -1,6 +1,6 @@
 
 # Benchmarking DARTH and LAET Quickstart
-This repository provides the code for reproducing the experimental results of DARTH, LAET, and HNSW (FAISS), which are reported in the Ada-ef paper. Ensure the Ada-ef experiments are set up beforehand, as these scripts load datasets from the Ada-ef root directory. 
+This repository is built based on the DARTH repository (https://github.com/MChatzakis/DARTH), and it provides the code for reproducing the experimental results of DARTH, LAET, and HNSW (FAISS), which are reported in the Ada-ef paper. Ensure the Ada-ef experiments are set up beforehand, as these scripts load datasets from the Ada-ef root directory. 
 
 ## Requirements
 - C++17-capable compiler (validated with `gcc 12.3.0`)
