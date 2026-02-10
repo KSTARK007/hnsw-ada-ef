@@ -136,71 +136,6 @@ void online_exp()
     }
 }
 
-void per_query_result_exp()
-{
-    std::cout << "Starting per-query result experiments...\n\n"
-              << std::endl;
-
-    std::vector<std::tuple<std::string, std::string, float, int>> dataset_metrics = {
-        {"deep-image-96-angular", "cd", 1e-3, 100},
-        {"cohere", "cd", 1e-3, 1000}};
-
-    for (const auto [dataset, metric, quantile_step, k] : dataset_metrics)
-    {
-        std::cout << "Dataset: " << dataset << std::endl
-                  << "Metric: " << metric << std::endl
-                  << "Quantile step: " << quantile_step << std::endl;
-
-        float expected_recall = 0.95;
-        int ef_upper_bound = 5000;
-        int repeat = 1;
-
-        std::shared_ptr<hnswlib::HierarchicalNSW<float>> hnsw;
-        std::shared_ptr<hnswdis::MatrixXf> query;
-        std::shared_ptr<hnswdis::MatrixXf> data;
-        std::shared_ptr<hnswdis::MatrixXi> ground_truth;
-        std::shared_ptr<hnswlib::SpaceInterface<float>> space;
-
-        std::string hdf5_path = (root / "data" / (dataset + ".hdf5")).string();
-        std::string index_path = (root / "index" / (dataset + "-M16-efc-500-parallel.hnsw")).string();
-
-        auto tuple = load_index_and_data(hdf5_path, index_path, metric);
-        hnsw = std::get<0>(tuple);
-        query = std::get<1>(tuple);
-        data = std::get<2>(tuple);
-        ground_truth = std::get<3>(tuple);
-        space = std::get<4>(tuple);
-
-        // the followings are for adaptive ef experiments
-        std::string ef_adaptor_path = (root / "estimation_table" / (dataset + "-ef_adaptor-" + "-k" + std::to_string(k) + "-ef.bin")).string(); // path for estimation table
-        std::string samplings_path = (root / "sampling" / (dataset + "-samplings-" + "-k" + std::to_string(k) + "-ef.bin")).string();           // path for sampling (queries and ground truth)
-        std::string estimator_path = (root / "statistics" / (dataset + "-estimator-" + "-k-" + std::to_string(k) + ".bin")).string();           // path for statistics of datasets (mean, variance, covaraince matrix)
-
-        auto start = std::chrono::high_resolution_clock::now();
-        auto end = std::chrono::high_resolution_clock::now();
-
-        // 1. load estimator
-        std::shared_ptr<hnswdis::Estimator> estimator;
-        estimator = hnswdis::load_estimator_from_file(estimator_path);
-        hnswdis::ApproximatedScoreCalculator score_cal(estimator, quantile_step);
-
-        // 2. load ef_adaptor
-        std::shared_ptr<hnswdis::EfAdapter> ef_adapter_ptr;
-        hnswdis::EfAdapter ef_adapter(ef_adaptor_path);
-        ef_adapter_ptr = std::make_shared<hnswdis::EfAdapter>(ef_adapter);
-
-        // 3. create sketch
-        hnswdis::Sketch sketch(
-            ef_adapter_ptr->get_ef_recall_estimators(),
-            expected_recall);
-        const float wae = ef_adapter_ptr->get_wae();
-        std::cout << "****Weighted average ef: " << (size_t)wae << std::endl;
-        size_t statics_length = 1 + 32 + 31 * 32; // 2-hop neighbors on the base layer: M = 16
-        hnsw->setEf(wae);
-        adaptive_search_per_query_result(dataset, *hnsw, *query, *data, *ground_truth, score_cal, k, sketch, statics_length, expected_recall);
-    }
-}
-
 void indexing_exp()
 {
     std::vector<std::pair<std::string, std::string>> dataset_metrics = {
@@ -1396,6 +1331,95 @@ void ablation_study_weighted_decay_function()
 
             adaptive_search(dataset, repeat, *hnsw, *query, *data, *ground_truth, score_cal, k, sketch, statics_length, expected_recall);
         }
+    }
+}
+
+void per_query_result_exp()
+{
+    std::cout << "Starting per-query result experiments...\n\n"
+              << std::endl;
+
+    Eigen::setNbThreads(std::max(1u, std::thread::hardware_concurrency() / 4)); // Limit to 1/4 available threads for eigen parallelization in ada-ef offline computation
+
+    std::vector<std::tuple<std::string, std::string, float, int>> dataset_metrics = {
+        {"deep-image-96-angular", "cd", 1e-3, 100},
+        {"glove-100-angular", "cd", 1e-3, 100},
+        {"msmarco", "cd", 1e-3, 1000},
+        {"cohere", "cd", 1e-3, 1000},
+        {"laion_image", "cd", 1e-3, 1000}, // image to image retrieval
+        {"laion_text", "cd", 1e-3, 1000},  // text to image retrieval
+        {"cluster_mg_uniform_100d", "cd", 1e-3, 1000},
+        {"cluster_mg_zipf_100d", "cd", 1e-3, 1000}
+        };
+
+    for (const auto [dataset, metric, quantile_step, k] : dataset_metrics)
+    {
+        std::cout << "Dataset: " << dataset << std::endl
+                  << "Metric: " << metric << std::endl
+                  << "Quantile step: " << quantile_step << std::endl;
+
+        float expected_recall = 0.95;
+        int ef_upper_bound = 5000;
+        int repeat = 3;
+
+        std::shared_ptr<hnswlib::HierarchicalNSW<float>> hnsw;
+        std::shared_ptr<hnswdis::MatrixXf> query;
+        std::shared_ptr<hnswdis::MatrixXf> data;
+        std::shared_ptr<hnswdis::MatrixXi> ground_truth;
+        std::shared_ptr<hnswlib::SpaceInterface<float>> space;
+
+        if (dataset == "laion_text")
+        {
+            setup_laion_text2image(hnsw, query, data, ground_truth, space);
+        }
+        else
+        {
+            std::string hdf5_path = (root / "data" / (dataset + ".hdf5")).string();
+            std::string index_path = (root / "index" / (dataset + "-M16-efc-500-parallel.hnsw")).string();
+            auto tuple = load_index_and_data(hdf5_path, index_path, metric);
+            hnsw = std::get<0>(tuple);
+            query = std::get<1>(tuple);
+            data = std::get<2>(tuple);
+            ground_truth = std::get<3>(tuple);
+            space = std::get<4>(tuple);
+        }
+
+        // the followings are for adaptive ef experiments
+        std::string ef_adaptor_path = (root / "estimation_table_o3" / (dataset + "-ef_adaptor-" + "-k" + std::to_string(k) + "-ef.bin")).string(); // path for estimation table
+        // std::string samplings_path = (root / "sampling_o3" / (dataset + "-samplings-" + "-k" + std::to_string(k) + "-ef.bin")).string();           // path for sampling (queries and ground truth)
+        std::string estimator_path = (root / "statistics_o3" / (dataset + "-estimator-" + "-k-" + std::to_string(k) + ".bin")).string();           // path for statistics of datasets (mean, variance, covaraince matrix)
+
+        if (dataset == "laion_text")
+        {
+            estimator_path = (root / "statistics_o3" / ("laion_image-estimator--k-" + std::to_string(k) + ".bin")).string();
+        }
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto end = std::chrono::high_resolution_clock::now();
+
+        // 1. load estimator
+        std::shared_ptr<hnswdis::Estimator> estimator;
+        estimator = hnswdis::load_estimator_from_file(estimator_path);
+        hnswdis::ApproximatedScoreCalculator score_cal(estimator, quantile_step);
+
+        // 2. load ef_adaptor
+        std::shared_ptr<hnswdis::EfAdapter> ef_adapter_ptr;
+        hnswdis::EfAdapter ef_adapter(ef_adaptor_path);
+        ef_adapter_ptr = std::make_shared<hnswdis::EfAdapter>(ef_adapter);
+
+        // 3. create sketch
+        hnswdis::Sketch sketch(
+            ef_adapter_ptr->get_ef_recall_estimators(),
+            expected_recall);
+        const float wae = ef_adapter_ptr->get_wae();
+        std::cout << "****Weighted average ef: " << (size_t)wae << std::endl;
+        size_t statics_length = 1 + 32 + 31 * 32; // 2-hop neighbors on the base layer: M = 16
+        hnsw->setEf(wae);
+        for (size_t i = 0; i < repeat; i++)
+        {
+            adaptive_search_per_query_result(dataset, *hnsw, *query, *data, *ground_truth, score_cal, k, sketch, statics_length, expected_recall);
+        }
+        
     }
 }
 

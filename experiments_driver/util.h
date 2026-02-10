@@ -628,19 +628,28 @@ void adaptive_search_per_query_result(
     }
 
     // === Summary statistics ===
+    double total_latency_seconds = std::accumulate(latencies_ns.begin(), latencies_ns.end(), 0.0) / 1e9;    double avg_latency = std::accumulate(latencies_ns.begin(), latencies_ns.end(), 0.0) / num_queries;
     double avg_latency = std::accumulate(latencies_ns.begin(), latencies_ns.end(), 0.0) / num_queries;
     double avg_recall = std::accumulate(recalls.begin(), recalls.end(), 0.0) / num_queries;
 
-    std::cout << "=== Per-Query Latency and Recall Results for " << dataset << " ===" << std::endl;
-    std::cout << "QueryID, Latency(ns), Recall" << std::endl;
-    for (int j = 0; j < num_queries; ++j)
-    {
-        std::cout << j << ", " << latencies_ns[j] << ", " << recalls[j] << std::endl;
+    // Output per-query results to a CSV file
+    std::string csv_filename = "per_query_results_" + dataset + ".csv";
+    std::ofstream csv_file(csv_filename);
+    if (csv_file.is_open()) {
+        csv_file << "QueryID,Latency(ns),Recall\n"; // Write the header
+        for (int j = 0; j < num_queries; ++j) {
+            csv_file << j << "," << latencies_ns[j] << "," << recalls[j] << "\n"; // Write each query's results
+        }
+        csv_file.close();
+        std::cout << "Per-query results have been written to " << csv_filename << std::endl;
+    } else {
+        std::cerr << "Error: Unable to open file for writing." << std::endl;
     }
 
     std::cout << "\n=== Summary ===" << std::endl;
     std::cout << "Average Latency: " << avg_latency << " ns" << std::endl;
     std::cout << "Average Recall: " << avg_recall << std::endl;
+    std::cout << "Total Latency: " << total_latency_seconds << " seconds" << std::endl;
 
     std::vector<int64_t> sorted_latencies = latencies_ns;
     std::sort(sorted_latencies.begin(), sorted_latencies.end());

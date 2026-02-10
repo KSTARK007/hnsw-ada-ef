@@ -1,6 +1,5 @@
-# HNSW Ada-ef - Adaptive efSearch configuration to approximately achieve declarative recall 
-A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on a per-query basis, enabling declarative recall instead of manually setting efsearch. Ada-ef automatically adjusts the ef value for each incoming vector query, preventing both over-searching (excessively large ef for simple queries that require small efSearch to reach recall target) and under-searching (insufficient efSearch for hard queries that require large efSearch to reach recall target).
-
+# HNSW Ada-ef (SIGMOD' 26) - Adaptive efSearch configuration to approximately achieve declarative recall 
+A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on a per-query basis, enabling declarative recall instead of manually setting efSearch. Ada-ef automatically adjusts the ef value for each incoming vector query, preventing both over-searching (excessively large ef for simple queries that require small efSearch to reach recall target) and under-searching (insufficient efSearch for hard queries that require large efSearch to reach recall target).
 
 ## Reproducing the Experiments
 
@@ -54,6 +53,29 @@ A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on 
    - Follow the walkthrough in the README under the folder `benchmarking-darth`. 
    - Ensure $ADA_EF_ROOT is set; the scripts load datasets from `$ADA_EF_ROOT/experiments/data` so make sure `$ADA_EF_ROOT` is available.
 
+## Reference
+
+```bibtex
+@article{10.1145/3786639,
+author = {Zhang, Chao and Miller, Ren\'{e}e J.},
+title = {Distribution-Aware Exploration for Adaptive HNSW Search},
+year = {2026},
+issue_date = {February 2026},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+volume = {4},
+number = {1},
+url = {https://doi.org/10.1145/3786639},
+doi = {10.1145/3786639},
+journal = {Proc. ACM Manag. Data},
+month = {feb},
+articleno = {25},
+numpages = {27},
+note = {(SIGMOD)}
+}
+```
+
+Extended version on arXiv: https://arxiv.org/abs/2512.06636
 
 ## Explanation of Directories
 
