@@ -1,4 +1,4 @@
-# HNSW Ada-ef (SIGMOD' 26) - Adaptive efSearch configuration to approximately achieve declarative recall 
+# HNSW Ada-ef (SIGMOD '26) - Adaptive efSearch configuration to approximately achieve declarative recall 
 A lightweight add-on to HNSWlib that enables adaptive efSearch configuration on a per-query basis, enabling declarative recall instead of manually setting efSearch. Ada-ef automatically adjusts the ef value for each incoming vector query, preventing both over-searching (excessively large ef for simple queries that require small efSearch to reach recall target) and under-searching (insufficient efSearch for hard queries that require large efSearch to reach recall target).
 
 ## Reproducing the Experiments
