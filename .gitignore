@@ -16,3 +16,9 @@ cmake-build-debug/
 experiments/
 !benchmarking-darth/experiments/
 .venv
+
+# Large datasets / downloads / logs
+collections/
+*.log
+uc?id=*
+our_implementation/
